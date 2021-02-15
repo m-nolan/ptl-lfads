@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torch.utils.data.dataset import Dataset
 import pytorch_lightning as pl
 from math import log
 
@@ -13,14 +15,24 @@ from math import log
 # -------------------------------------------------
 # -------------------------------------------------
 
-# general prediction model class. No forward method or model initialization.
+# general prediction model class. No forward method or model initialization. Defines training, validation and testing steps used by pytorch-lightning run manager.
 class PredictionModel(pl.LightningModule):
     
     def __init__(self,config):
         super(PredictionModel, self).__init__()
-        
+        self.src_size   = config.src_size
+        self.batch_size = config.batch_size
         self.lr         = config.learning_rate
         self.lr_factor  = config.learning_rate_factor
+
+    def forward(self,src,trg):
+        '''
+        Base time series prediction class forward method.
+
+        Meant to be overwritten by particular architectures. This method returns an empty output.
+        '''
+        pred = src
+        return pred
 
     def training_step(self, train_batch, batch_idx):
         src, trg = train_batch
@@ -43,6 +55,7 @@ class PredictionModel(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x['valid_loss'] for x in outputs]).mean()
         self.logger.experiment.log({'avg_valid_loss': avg_loss})
+        #   ADD: PERFORMANCE METRICS
         return {'avg_valid_loss': avg_loss}
 
     def test_step(self, test_batch, batch_idx):
@@ -52,6 +65,7 @@ class PredictionModel(pl.LightningModule):
         self.logger.experiment.log({'test_loss': loss})
         for k in loss_dict.keys():
             self.logger.experiment.log({f'test_{k}': loss_dict[k]})
+        #   ADD: PERFORMANCE METRICS
         return {'test_loss': loss}
 
     def configure_optimizers(self):
@@ -63,9 +77,88 @@ class PredictionModel(pl.LightningModule):
             'monitor': 'avg_valid_loss'
         }
 
+    # what is this supposed to be? Model-specific arguments should be in wandb.config from a yaml file
     @staticmethod
-    def add_model_specific_arguments(parent_parser):
-        None
+    def add_model_specific_arguments(parent_parser): # can I cascade this?
+        parent_parser.add_argument('src_size')
+        parent_parser.add_argument('batch_size')
+        parent_parser.add_argument('lr')
+        parent_parser.add_argument('lr_factor')
+
+
+# -------------------------------------------------
+# -------------------------------------------------
+
+class EcogSrcTrgDataset(Dataset):
+    
+    def __init__(self, tensor, src_len, trg_len=None):
+        self.src_len = src_len,
+        if trg_len:
+            trg_len = src_len
+        self.trg_len = trg_len
+        
+        assert tensor.shape[1] >= src_len + trg_len, f"sequence length cannot be longer than 1/2 data sample length ({tensor.shape[1]})"
+        self.tensor = torch.tensor(tensor).float()
+
+    def __getitem__(self, index):
+        src = self.tensor[index,:self.src_len,:]
+        trg = self.tensor[index,self.src_len:self.src_len+self.trg_len,:]
+        return (src, trg)
+
+    def __len__(self):
+        return self.tensor.shape[0]
+        
+# -------------------------------------------------
+# -------------------------------------------------
+
+class EcogPredictionModel(PredictionModel):
+     
+    def __init__(self,config):
+        try:
+            self.data_file_path = config.data_file_path
+        except NameError:
+            raise NameError("data_file_path not defined in WAndB configuration. Halting Execution.")
+        self.src_len = config.sequence_length,
+        self.trg_len = config.sequence_length,
+        super(EcogPredictionModel, self).__init__(config)
+
+    def prepare_data(self):
+        # load datasets from hdf5 volume
+        data_dict = self.read_h5(self.data_file_path)
+        self.train_dataset  = EcogSrcTrgDataset(
+            data_dict[f"train_{self.data_suffix}"],
+            self.src_len,
+            self.trg_len
+            )
+        self.valid_dataset  = EcogSrcTrgDataset(
+            data_dict[f"valid_{self.data_suffix}"],
+            self.src_len,
+            self.trg_len
+            )
+        self.test_dataset   = EcogSrcTrgDataset(
+            data_dict[f"test_{self.data_suffix}"],
+            self.src_len,
+            self.trg_len
+            )
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset,batch_size=self.batch_size)
+
+    def val_dataloader(self):
+        return DataLoader(self.valid_dataset,batch_size=self.batch_size)
+    
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size)
+    
+    @staticmethod
+    def read_h5(data_file_path):
+        try:
+            with h5py.File(data_file_path, 'r') as hf:
+                data_dict = {k: torch.tensor(hf[k].value) for k in hf.keys()}
+            return data_dict
+        except IOError:
+            print(f'Cannot open data file {data_file_path}.')
+            raise
 
 # -------------------------------------------------
 # -------------------------------------------------
