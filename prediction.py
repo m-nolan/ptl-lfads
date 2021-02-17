@@ -84,87 +84,68 @@ class PredictionModel(pl.LightningModule):
         parent_parser.add_argument('batch_size')
         parent_parser.add_argument('lr')
         parent_parser.add_argument('lr_factor')
-
-
-# -------------------------------------------------
-# -------------------------------------------------
-
-class EcogSrcTrgDataset(Dataset):
-    
-    def __init__(self, tensor, src_len, trg_len=None):
-        self.src_len = src_len,
-        if trg_len:
-            trg_len = src_len
-        self.trg_len = trg_len
-        
-        assert tensor.shape[1] >= src_len + trg_len, f"sequence length cannot be longer than 1/2 data sample length ({tensor.shape[1]})"
-        self.tensor = torch.tensor(tensor).float()
-
-    def __getitem__(self, index):
-        src = self.tensor[index,:self.src_len,:]
-        trg = self.tensor[index,self.src_len:self.src_len+self.trg_len,:]
-        return (src, trg)
-
-    def __len__(self):
-        return self.tensor.shape[0]
         
 # -------------------------------------------------
 # -------------------------------------------------
 
-class EcogPredictionModel(PredictionModel):
-     
-    def __init__(self,config):
-        try:
-            self.data_file_path = config.data_file_path
-        except NameError:
-            raise NameError("data_file_path not defined in WAndB configuration. Halting Execution.")
-        self.src_len = config.sequence_length,
-        self.trg_len = config.sequence_length,
-        super(EcogPredictionModel, self).__init__(config)
+class Lfads(PredictionModel):
 
-    def prepare_data(self):
-        # load datasets from hdf5 volume
-        data_dict = self.read_h5(self.data_file_path)
-        self.train_dataset  = EcogSrcTrgDataset(
-            data_dict[f"train_{self.data_suffix}"],
-            self.src_len,
-            self.trg_len
+    def __init__(
+      self, src_size, encoder_size, encoder_layers, generator_size, generator_layers, factor_size, loss_weight_dict, dropout,
+      generator_bidir=True, factor_bias=False, do_normalize_factors=True, clip_val=5.0, max_norm=10 
+    ):
+
+        # encoder block
+        self.encoder_gru = nn.GRU(
+            input_size = src_size,
+            hidden_size = encoder_size,
+            num_layers = encoder_layers,
+            batch_first = True,
+            dropout = dropout,
+            bidirectional = True,
+        )
+        
+        # transform encoder samples into generator initial conditions
+        if encoder_size*encoder_layers == generator_size*generator_layers:
+            self.encoder_fc = Identity(
+                in_features = encoder_size*encoder_layers,
+                out_features = generator_size*generator_layers
             )
-        self.valid_dataset  = EcogSrcTrgDataset(
-            data_dict[f"valid_{self.data_suffix}"],
-            self.src_len,
-            self.trg_len
-            )
-        self.test_dataset   = EcogSrcTrgDataset(
-            data_dict[f"test_{self.data_suffix}"],
-            self.src_len,
-            self.trg_len
+        else:
+            self.encoder_fc = nn.Linear(
+                in_features = encoder_size*encoder_layers,
+                out_features = generator_size*generator_layers
             )
 
-    def train_dataloader(self):
-        return DataLoader(self.train_dataset,batch_size=self.batch_size)
+        # generator block
+        self.generator_gru = nn.GRU(
+            input_size = 0,
+            hidden_size = generator_size,
+            num_layers = generator_layers,
+            batch_first = True,
+            dropout = dropout,
+            bidirectional = generator_bidir
+        )
 
-    def val_dataloader(self):
-        return DataLoader(self.valid_dataset,batch_size=self.batch_size)
-    
-    def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size)
-    
-    @staticmethod
-    def read_h5(data_file_path):
-        try:
-            with h5py.File(data_file_path, 'r') as hf:
-                data_dict = {k: torch.tensor(hf[k].value) for k in hf.keys()}
-            return data_dict
-        except IOError:
-            print(f'Cannot open data file {data_file_path}.')
-            raise
+        # factor process block
+        generator_scale = 2 if generator_bidir else 1
+        self.factor_fc = nn.Linear(
+            in_features = generator_size*generator_layers*generator_scale,
+            out_features = factor_size
+        )
+
+        # output block! Final output, compared with target
+        self.output_fc = nn.Linear(
+            in_features = factor_size,
+            out_features = src_size
+        )
+
 
 # -------------------------------------------------
 # -------------------------------------------------
 
 # vanilla LFADS model - controller implemented, removed if controller size is 0
-class Lfads(PredictionModel):
+class Lfads_old(PredictionModel):
     
     def __init__(self,config):
         super(Lfads, self).__init__(config)
@@ -832,3 +813,10 @@ def kldiv_gaussian_gaussian(post_mu, post_lv, prior_mu, prior_lv):
     klc = 0.5 * (prior_lv - post_lv + torch.exp(post_lv - prior_lv) \
          + ((post_mu - prior_mu)/torch.exp(0.5 * prior_lv)).pow(2) - 1.0).mean(dim=0).sum()
     return klc
+
+class Identity(nn.Module):
+    def __init__(self, in_features, out_features):
+        super(Identity, self).__init__()
+    
+    def forward(self, x):
+        return x

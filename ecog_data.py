@@ -76,12 +76,12 @@ class GooseWireless250(pl.LightningDataModule):
         
         Data is sampled at 250Hz. No BPF beyond decimation required during downsampling from 1kHz. Dataset has a fixed 80:10:10::train:val:test split.
     '''
-    def __init__(self, config, transforms=None, data_device='cpu'):
+    def __init__(self, src_len, trg_len, batch_size, transforms=None, data_device='cpu'):
         super().__init__()
 
-        self.src_len    = config.src_len
-        self.trg_len    = config.trg_len
-        self.batch_size = config.batch_size
+        self.src_len    = src_len
+        self.trg_len    = trg_len
+        self.batch_size = batch_size
         # this is a hdf5 dataset with the following items (flat structure): dt, train_data, valid_data, test_data.
         file_path       = "D:\\Users\\mickey\\Data\\datasets\\ecog\\goose_wireless\\gw_250"
         self.file_path  = file_path
