@@ -1,0 +1,16 @@
+parameters:
+  n_unit_encoder:
+    desc: (Int) Number of encoder units (per layer)
+    value: 256
+  n_layer_encoder:
+    desc: (Int) Number of encoder layers
+    value: 3
+  bidir_encoder:
+    desc: (Bool) Bidirectional encoder design
+    value: True
+  n_unit_generator:
+    desc: (Int) Number of generator units (per layer)
+    value: 1024
+  n_layer_generator:
+    desc: (Int) Number of generator layers
+    value: 1

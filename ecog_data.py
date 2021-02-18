@@ -10,9 +10,9 @@ from math import floor
 # pytorch Dataset class implementation for Electrocorticograph (ECoG) data
 # ---------------------------------- --------------------- ------------- -------- ----- --- -- - -
 
-class EcogSrcTrgDataset(Dataset):
+class EcogSrcTrgDataset_inmem(Dataset):
     '''
-        Dataset module for src/trg pair returns from a given tensor source.
+        Dataset module for src/trg pair returns from a given tensor source (in memory, pytorch tensor).
 
         use:
             src, trg = dset.__getitem__(idx)
@@ -36,6 +36,34 @@ class EcogSrcTrgDataset(Dataset):
 
     def __len__(self):
         return self.tensor.shape[0]
+
+class EcogSrcTrgDataset(Dataset):
+    '''
+        Dataset module for src/trg pair returns from a given tensor source (file location, hdf5)
+    '''
+    def __init__(self, file_path, src_len, trg_len=None, split_str='train', transform=None):
+        None
+        self.file_path  = file_path
+        self.split_str  = split_str
+        self.read_str   = f'{self.split_str}_ecog'
+        self.src_len    = src_len
+        if trg_len:
+            trg_len         = src_len
+        self.trg_len    = trg_len
+        assert tensor.shape[1] >= src_len + trg_len, f"sequence length cannot be longer than 1/2 data sample length ({tensor.shape[1]})"
+        with h5py.File(self.file_path,'r') as hf:
+            self.shape      = hf[self.read_str].shape
+        self.transform  = transform
+
+    def __getitem__(self, index):
+        with h5py.File(self.file_path,'r') as hf:
+            sample = hf[self.read_str][index,:,:]
+        src = torch.tensor(sample[:self.src_len,:])
+        trg = torch.tensor(sample[self.src_len:self.src_len+self.trg_len,:])
+        return (src,trg)
+
+    def __len__(self):
+        return self.shape[0]
 
 # - - -- --- ----- -------- ------------- --------------------- ----------------------------------
 # ECoG sample transforms
@@ -98,47 +126,31 @@ class GooseWireless250(pl.LightningDataModule):
         self.data_device    = data_device   # I want to keep the data tensors on the CPU, then read batches to the GPU.
 
     def prepare_data(self): # run once. 
+        assert os.path.exists(self.file_path), "Dataset file not found, check file path string"
+        return None
+
+    def setup(self, stage=None): # run on each GPU
         self.train_dataset  = EcogSrcTrgDataset(
-            _read_h5_key(self.file_path,'train_ecog'),
+            file_path   = self.file_path,
+            split_str   = 'train',
             src_len     = self.src_len,
             trg_len     = self.trg_len,
             transform   = self.transforms
         )#.to(self.data_device)
         self.val_dataset    = EcogSrcTrgDataset(
-            _read_h5_key(self.file_path,'valid_ecog'),
+            file_path   = self.file_path,
+            split_str   = 'valid',
             src_len     = self.src_len,
             trg_len     = self.trg_len,
             transform   = self.transforms
         )#.to(self.data_device)
         self.test_dataset = EcogSrcTrgDataset(
-            _read_h5_key(self.file_path,'test_ecog'),
+            file_path   = self.file_path,
+            split_str   = 'test',
             src_len     = self.src_len,
             trg_len     = self.trg_len,
             transform   = self.transforms
         )#.to(self.data_device)
-
-    def setup(self, stage=None): # run on each GPU
-        # if stage == 'fit' or stage is None:
-        #     self.train_dataset  = EcogSrcTrgDataset(
-        #         _read_h5_key(self.file_path,'train_ecog'),
-        #         src_len     = self.src_len,
-        #         trg_len     = self.trg_len,
-        #         transform   = self.transforms
-        #     )
-        #     self.val_dataset    = EcogSrcTrgDataset(
-        #         _read_h5_key(self.file_path,'valid_ecog'),
-        #         src_len     = self.src_len,
-        #         trg_len     = self.trg_len,
-        #         transform   = self.transforms
-        #     )
-        # if stage == 'test' or stage is None:
-        #     self.test_dataset = EcogSrcTrgDataset(
-        #         _read_h5_key(self.file_path,'test_ecog'),
-        #         src_len     = self.src_len,
-        #         trg_len     = self.trg_len,
-        #         transform   = self.transforms
-        #     )
-        None
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size)
