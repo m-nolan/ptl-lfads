@@ -5,6 +5,7 @@ from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 import pytorch_lightning as pl
 from math import floor
+import os
 
 # - - -- --- ----- -------- ------------- --------------------- ----------------------------------
 # pytorch Dataset class implementation for Electrocorticograph (ECoG) data
@@ -50,9 +51,9 @@ class EcogSrcTrgDataset(Dataset):
         if trg_len:
             trg_len         = src_len
         self.trg_len    = trg_len
-        assert tensor.shape[1] >= src_len + trg_len, f"sequence length cannot be longer than 1/2 data sample length ({tensor.shape[1]})"
         with h5py.File(self.file_path,'r') as hf:
             self.shape      = hf[self.read_str].shape
+        assert self.shape[1] >= src_len + trg_len, f"sequence length cannot be longer than 1/2 data sample length ({tensor.shape[1]})"
         self.transform  = transform
 
     def __getitem__(self, index):
