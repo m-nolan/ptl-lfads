@@ -59,8 +59,8 @@ class EcogSrcTrgDataset(Dataset):
     def __getitem__(self, index):
         with h5py.File(self.file_path,'r') as hf:
             sample = hf[self.read_str][index,:,:]
-        src = torch.tensor(sample[:self.src_len,:])
-        trg = torch.tensor(sample[self.src_len:self.src_len+self.trg_len,:])
+        src = torch.tensor(sample[:self.src_len,:], dtype=torch.float32)
+        trg = torch.tensor(sample[self.src_len:self.src_len+self.trg_len,:], dtype=torch.float32)
         return (src,trg)
 
     def __len__(self):

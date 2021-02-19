@@ -18,12 +18,11 @@ from math import log
 # general prediction model class. No forward method or model initialization. Defines training, validation and testing steps used by pytorch-lightning run manager.
 class PredictionModel(pl.LightningModule):
     
-    def __init__(self,config):
+    def __init__(self,src_size,learning_rate,learning_rate_factor):
         super(PredictionModel, self).__init__()
-        self.src_size   = config.src_size
-        self.batch_size = config.batch_size
-        self.lr         = config.learning_rate
-        self.lr_factor  = config.learning_rate_factor
+        self.src_size   = src_size
+        self.lr         = learning_rate
+        self.lr_factor  = learning_rate_factor
 
     def forward(self,src,trg):
         '''
@@ -91,10 +90,22 @@ class PredictionModel(pl.LightningModule):
 class Lfads(PredictionModel):
 
     def __init__(
-      self, src_size, encoder_size, encoder_layers, generator_size, generator_layers, factor_size, loss_weight_dict, dropout,
+      self, src_size, encoder_size, encoder_layers, generator_size, generator_layers, factor_size, 
+      loss_weight_dict, dropout, learning_rate, lr_factor,
       generator_bidir=True, factor_bias=False, do_normalize_factors=True, clip_val=5.0, max_norm=10 
     ):
+        super(Lfads, self).__init__(src_size,learning_rate,lr_factor)
+        # set model parameters
+        self.encoder_size       = encoder_size
+        self.encoder_layers     = encoder_layers
+        self.generator_size     = generator_size
+        self.generator_layers   = generator_layers
+        self.generator_scale    = 2 if generator_bidir else 1
+        self.factor_size        = factor_size
+        self.loss_weight_dict   = loss_weight_dict
+        self.dropout            = dropout
 
+        ## create model modules
         # encoder block
         self.encoder_gru = nn.GRU(
             input_size = src_size,
@@ -106,20 +117,20 @@ class Lfads(PredictionModel):
         )
         
         # transform encoder samples into generator initial conditions
-        if encoder_size*encoder_layers == generator_size*generator_layers:
+        if encoder_size*encoder_layers == generator_size*generator_layers*self.generator_scale:
             self.encoder_fc = Identity(
                 in_features = encoder_size*encoder_layers,
-                out_features = generator_size*generator_layers
+                out_features = generator_size*generator_layers*self.generator_scale
             )
         else:
             self.encoder_fc = nn.Linear(
                 in_features = encoder_size*encoder_layers,
-                out_features = generator_size*generator_layers
+                out_features = generator_size*generator_layers*self.generator_scale
             )
 
         # generator block
         self.generator_gru = nn.GRU(
-            input_size = 0,
+            input_size = 1,
             hidden_size = generator_size,
             num_layers = generator_layers,
             batch_first = True,
@@ -128,9 +139,8 @@ class Lfads(PredictionModel):
         )
 
         # factor process block
-        generator_scale = 2 if generator_bidir else 1
         self.factor_fc = nn.Linear(
-            in_features = generator_size*generator_layers*generator_scale,
+            in_features = generator_size*generator_layers*self.generator_scale,
             out_features = factor_size
         )
 
@@ -140,6 +150,51 @@ class Lfads(PredictionModel):
             out_features = src_size
         )
 
+        # ## initialize module parameters
+        # self.encoder_ic = nn.Parameter(torch.zeros(2*encoder_layers,encoder_size))
+
+
+    def _encoder_gaussian_sample(self,enc_hid):
+        mean = enc_hid[0,:,:]
+        logvar = enc_hid[1,:,:]
+        eps = torch.randn(mean.shape, requires_grad=False, dtype=torch.float32).to(torch.get_default_dtype()).to(self.device)
+        # Scale and shift by mean and standard deviation
+        return torch.exp(logvar*0.5)*eps + mean
+
+
+    def forward( self, src, trg ):
+        # encoder outputs
+        encoder_out, encoder_hidden = self.encoder_gru(src)
+        encoder_out_sample = self._encoder_gaussian_sample(encoder_hidden)
+        generator_ic = self.encoder_fc(encoder_out_sample).reshape(
+                self.generator_scale*self.generator_layers,
+                src.shape[0],
+                self.generator_size
+                )
+        generator_input = torch.empty(src.shape[0],src.shape[1],1).type_as(src)
+        generator_out, generator_hidden = self.generator_gru(generator_input,generator_ic)
+        factors = self.factor_fc(generator_out)
+        pred = self.output_fc(factors)
+        return {
+            'pred': pred,
+            'factors': factors,
+            'generator_hidden': generator_hidden,
+        }
+
+    def loss(self, trg, pred):
+        '''
+        Complete LFADS model loss. Combined prediction error, scaled KL divergence from generator outputs and L2 loss.
+        '''
+        pred_err = F.mse_loss(pred['pred'],trg,reduce=True,reduction='sum')
+        # kl_div = 0
+        # l2_loss = 0
+        loss = pred_err #+ kl_div + l2_loss
+        loss_dict = {
+            'pred_err': pred_err,
+            # 'kl_div': kl_div,
+            # 'l2_loss': l2_loss,
+        }
+        return loss, loss_dict
 
 # -------------------------------------------------
 # -------------------------------------------------
