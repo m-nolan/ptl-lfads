@@ -18,11 +18,13 @@ from math import log
 # general prediction model class. No forward method or model initialization. Defines training, validation and testing steps used by pytorch-lightning run manager.
 class PredictionModel(pl.LightningModule):
     
-    def __init__(self,src_size,learning_rate,learning_rate_factor):
+    def __init__(self,src_size,learning_rate,learning_rate_factor,mode='prediction'):
         super(PredictionModel, self).__init__()
         self.src_size   = src_size
         self.lr         = learning_rate
         self.lr_factor  = learning_rate_factor
+        assert mode in ['prediction','reconstruction'], 'argument Mode must be either ''prediction'' or ''reconstruction''.'
+        self.mode = mode
 
     def forward(self,src,trg):
         '''
@@ -33,23 +35,29 @@ class PredictionModel(pl.LightningModule):
         pred = src
         return pred
 
+    # def training_step(self, train_batch, batch_idx):
+    #     src, trg = train_batch
+    #     pred = self.forward(src,trg)
+    #     loss, loss_dict = self.loss(pred,trg) # note: loss returns total loss objective and dict of summands
+    #     self.logger.experiment.log({'train_loss': loss})
+    #     for k in loss_dict.keys():
+    #         self.logger.experiment.log({f'train_{k}': loss_dict[k]})
+    #     return {'loss': loss}
+
     def training_step(self, train_batch, batch_idx):
-        src, trg = train_batch
-        pred = self.forward(src,trg)
-        loss, loss_dict = self.loss(trg,pred) # note: loss returns total loss objective and dict of summands
-        self.logger.experiment.log({'train_loss': loss})
-        for k in loss_dict.keys():
-            self.logger.experiment.log({f'train_{k}': loss_dict[k]})
-        return {'loss': loss}
+        return self._step(train_batch, batch_idx, 'train')
     
+    # def validation_step(self, valid_batch, batch_idx):
+    #     src, trg = valid_batch
+    #     pred = self.forward(src,trg)
+    #     loss, loss_dict = self.loss(pred,trg)
+    #     self.logger.experiment.log({'valid_loss': loss})
+    #     for k in loss_dict.keys():
+    #         self.logger.experiment.log({f'valid_{k}': loss_dict[k]})
+    #     return {'valid_loss': loss}
+
     def validation_step(self, valid_batch, batch_idx):
-        src, trg = valid_batch
-        pred = self.forward(src,trg)
-        loss, loss_dict = self.loss(trg,pred)
-        self.logger.experiment.log({'valid_loss': loss})
-        for k in loss_dict.keys():
-            self.logger.experiment.log({f'valid_{k}': loss_dict[k]})
-        return {'valid_loss': loss}
+        return self._step(valid_batch, batch_idx, 'valid')
 
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x['valid_loss'] for x in outputs]).mean()
@@ -57,15 +65,30 @@ class PredictionModel(pl.LightningModule):
         #   ADD: PERFORMANCE METRICS
         return {'avg_valid_loss': avg_loss}
 
+    # def test_step(self, test_batch, batch_idx):
+    #     src, trg = test_batch
+    #     pred = self.forward(src,trg)
+    #     loss, loss_dict = self.loss(pred,trg)
+    #     self.logger.experiment.log({'test_loss': loss})
+    #     for k in loss_dict.keys():
+    #         self.logger.experiment.log({f'test_{k}': loss_dict[k]})
+    #     #   ADD: PERFORMANCE METRICS
+    #     return {'test_loss': loss}
+    
     def test_step(self, test_batch, batch_idx):
-        src, trg = test_batch
+        return self._step(test_batch, batch_idx, 'test')
+
+    def _step(self, batch, batch_idx, log_string_prefix):
+        src, trg = batch
         pred = self.forward(src,trg)
-        loss, loss_dict = self.loss(trg,pred)
-        self.logger.experiment.log({'test_loss': loss})
+        if self.mode == 'prediction':
+            loss, loss_dict = self.loss(pred,trg)
+        elif self.mode == 'reconstruction':
+            loss, loss_dict = self.loss(pred,src)
+        self.logger.experiment.log({f'{log_string_prefix}_loss': loss})
         for k in loss_dict.keys():
-            self.logger.experiment.log({f'test_{k}': loss_dict[k]})
-        #   ADD: PERFORMANCE METRICS
-        return {'test_loss': loss}
+            self.logger.experiment.log({f'{log_string_prefix}_{k}': loss_dict[k]})
+        return {f'{log_string_prefix}_loss': loss}
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(),self.lr) # set rate?
@@ -83,7 +106,7 @@ class PredictionModel(pl.LightningModule):
         parent_parser.add_argument('batch_size')
         parent_parser.add_argument('lr')
         parent_parser.add_argument('lr_factor')
-        
+
 # -------------------------------------------------
 # -------------------------------------------------
 
