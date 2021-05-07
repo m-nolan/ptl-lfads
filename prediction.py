@@ -26,35 +26,8 @@ class PredictionModel(pl.LightningModule):
         assert mode in ['prediction','reconstruction'], 'argument Mode must be either ''prediction'' or ''reconstruction''.'
         self.mode = mode
 
-    def forward(self,src,trg):
-        '''
-        Base time series prediction class forward method.
-
-        Meant to be overwritten by particular architectures. This method returns an empty output.
-        '''
-        pred = src
-        return pred
-
-    # def training_step(self, train_batch, batch_idx):
-    #     src, trg = train_batch
-    #     pred = self.forward(src,trg)
-    #     loss, loss_dict = self.loss(pred,trg) # note: loss returns total loss objective and dict of summands
-    #     self.logger.experiment.log({'train_loss': loss})
-    #     for k in loss_dict.keys():
-    #         self.logger.experiment.log({f'train_{k}': loss_dict[k]})
-    #     return {'loss': loss}
-
     def training_step(self, train_batch, batch_idx):
         return self._step(train_batch, batch_idx, 'train')
-    
-    # def validation_step(self, valid_batch, batch_idx):
-    #     src, trg = valid_batch
-    #     pred = self.forward(src,trg)
-    #     loss, loss_dict = self.loss(pred,trg)
-    #     self.logger.experiment.log({'valid_loss': loss})
-    #     for k in loss_dict.keys():
-    #         self.logger.experiment.log({f'valid_{k}': loss_dict[k]})
-    #     return {'valid_loss': loss}
 
     def validation_step(self, valid_batch, batch_idx):
         return self._step(valid_batch, batch_idx, 'valid')
@@ -64,16 +37,6 @@ class PredictionModel(pl.LightningModule):
         self.logger.experiment.log({'avg_valid_loss': avg_loss})
         #   ADD: PERFORMANCE METRICS
         return {'avg_valid_loss': avg_loss}
-
-    # def test_step(self, test_batch, batch_idx):
-    #     src, trg = test_batch
-    #     pred = self.forward(src,trg)
-    #     loss, loss_dict = self.loss(pred,trg)
-    #     self.logger.experiment.log({'test_loss': loss})
-    #     for k in loss_dict.keys():
-    #         self.logger.experiment.log({f'test_{k}': loss_dict[k]})
-    #     #   ADD: PERFORMANCE METRICS
-    #     return {'test_loss': loss}
     
     def test_step(self, test_batch, batch_idx):
         return self._step(test_batch, batch_idx, 'test')
@@ -326,10 +289,10 @@ class Lfads(PredictionModel):
         return {
             'pred': pred,
             'factors': factors,
-            'generator_hidden': generator_hidden,
+            'generator_out': generator_out,
         }
 
-    def loss(self, trg, pred):
+    def loss(self, pred, trg):
         '''
         Complete LFADS model loss. Combined prediction error, scaled KL divergence from generator outputs and L2 loss.
         '''
