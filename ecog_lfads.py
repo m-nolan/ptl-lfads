@@ -40,6 +40,7 @@ class LfadsModel_ECoG(prediction.Lfads):
             generator_size = self.generator_size,
             generator_layers = 1,
             factor_size = self.factor_size,
+            prior  = config.prior,
             loss_weight_dict = config.loss_weight_dict,
             dropout = config.dropout,
             learning_rate = config.learning_rate,
@@ -142,12 +143,14 @@ class EcogSrcTrgDatasetFromFile(Dataset):
     def __init__(self, file_path, key, seq_len):
         h5record = h5py.File(file_path,'r')
         self.tensor = h5record[key]
-        assert self.tensor.shape[1] >= 2*seq_len, f"sequence length cannot be longer than 1/2 data sample length ({self.tensor.shape[1]})"
+        # assert self.tensor.shape[1] >= 2*seq_len, f"sequence length cannot be longer than 1/2 data sample length ({self.tensor.shape[1]})"
         self.seq_len = seq_len
 
     def __getitem__(self, index):
         src = torch.tensor(self.tensor[index,:self.seq_len,:],dtype=torch.float32)
-        trg = torch.tensor(self.tensor[index,self.seq_len:2*self.seq_len,:],dtype=torch.float32)
+        # add recon/predict switch? needs a better, properly-normalized dataset....
+        # trg = torch.tensor(self.tensor[index,self.seq_len:2*self.seq_len,:],dtype=torch.float32)
+        trg = torch.tensor(self.tensor[index,:self.seq_len,:],dtype=torch.float32)
         return (src, trg)
 
     def __len__(self):

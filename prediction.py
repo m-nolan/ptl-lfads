@@ -6,6 +6,8 @@ from torch.utils.data.dataset import Dataset
 import pytorch_lightning as pl
 from math import log
 
+import matplotlib.pyplot as plt
+
 # class structure: all prediction models inherit the PredictionModel class.
 # PredictionModel contains train_step(), valid_step(), test_step() and validation_epoch_end() methods.
 #   PredictionModel also contains model performance metric outputs, tied into test_step.
@@ -35,8 +37,9 @@ class PredictionModel(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x['valid_loss'] for x in outputs]).mean()
         self.logger.experiment.log({'avg_valid_loss': avg_loss})
+        self.log('avg_valid_loss', avg_loss)
         #   ADD: PERFORMANCE METRICS
-        return {'avg_valid_loss': avg_loss}
+        # return {'avg_valid_loss': avg_loss}
     
     def test_step(self, test_batch, batch_idx):
         return self._step(test_batch, batch_idx, 'test')
@@ -49,17 +52,21 @@ class PredictionModel(pl.LightningModule):
         elif self.mode == 'reconstruction':
             loss, loss_dict = self.loss(pred,src)
         self.logger.experiment.log({f'{log_string_prefix}_loss': loss})
+        self.log(f'{log_string_prefix}_loss',loss)
         for k in loss_dict.keys():
             self.logger.experiment.log({f'{log_string_prefix}_{k}': loss_dict[k]})
-        return {f'{log_string_prefix}_loss': loss}
+        return {'loss': loss, f'{log_string_prefix}_loss': loss}
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(),self.lr) # set rate?
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,factor=self.lr_factor)
         return {
             'optimizer': optimizer,
-            'lr_scheduler': scheduler,
-            'monitor': 'avg_valid_loss'
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'monitor': 'avg_valid_loss',
+                'interval': 'epoch',
+            }
         }
 
     # what is this supposed to be? Model-specific arguments should be in wandb.config from a yaml file
@@ -70,139 +77,14 @@ class PredictionModel(pl.LightningModule):
         parent_parser.add_argument('lr')
         parent_parser.add_argument('lr_factor')
 
-# -------------------------------------------------
-# -------------------------------------------------
-
-class ConvAE(PredictionModel):
-
-    def __init__(self, input_size, latent_size, src_len, trg_len, n_kernels, kernel_size, pool_size=2, dropout=0.3, learning_rate=1e-3):
-        super(ConvAE, self).__init__(input_size, learning_rate, 0.5)
-        self.input_size     = input_size
-        self.latent_size    = latent_size
-        self.src_len        = src_len 
-        self.trg_len        = trg_len
-        self.n_kernels      = n_kernels 
-        self.kernel_size    = kernel_size
-        self.pool_size      = pool_size
-        self.dropout        = dropout
-        self.learning_rate  = learning_rate
-
-        self.flat_size      = src_len // pool_size * n_kernels
-
-        self.encoder_1  = nn.Sequential(
-            # Block 1 (time conv)
-            nn.Conv2d(
-                in_channels     = 1,
-                out_channels    = self.n_kernels,
-                kernel_size     = (self.kernel_size, 1),
-                stride          = 1,
-                padding         = (self.kernel_size//2,0), # is this right?
-                padding_mode    = 'replicate'
-            ),
-            nn.BatchNorm2d(self.n_kernels),
-            nn.ELU(),
-            nn.Dropout(self.dropout)
-        )
-        self.encoder_2  = nn.Sequential(
-            # Block 2 (channel conv)
-            nn.Conv2d(
-                in_channels     = self.n_kernels,
-                out_channels    = self.n_kernels,
-                kernel_size     = (1, self.input_size),
-                stride          = 1
-            ),
-            nn.BatchNorm2d(self.n_kernels),
-            nn.ELU(),
-            nn.Dropout(self.dropout)
-        )
-        self.encoder_3  = nn.Sequential(
-            # Block 3 (reduce, flatten)
-            nn.AvgPool2d(
-                kernel_size     = (2,1),
-                stride          = 2
-            ),
-            nn.Flatten()
-        )
-
-        self.l_mean     = nn.Linear(
-            in_features     = self.flat_size,
-            out_features    = self.latent_size
-        )
-
-        self.l_logvar   = nn.Linear(
-            in_features     = self.flat_size,
-            out_features    = self.latent_size
-        )
-
-        self.decoder_1  = nn.Sequential(
-            # Block 1 (reform)
-            nn.Linear(
-                in_features     = self.latent_size,
-                out_features    = self.flat_size
-            )
-        ) # compose with tensor view
-        self.decoder_2  = nn.Sequential(
-            # Block 2 (deconv channels)
-            nn.Upsample(
-                size = (trg_len, 1)
-            ),
-            nn.ConvTranspose2d(
-                in_channels     = self.n_kernels,
-                out_channels    = self.n_kernels,
-                kernel_size     = (1, self.input_size),
-                stride          = 1
-            ),
-            nn.BatchNorm2d(self.n_kernels),
-            nn.ELU(),
-            nn.Dropout(self.dropout),
-        )
-        self.decoder_3  = nn.Sequential(
-            # Block 3 (deconv time)
-            nn.ConvTranspose2d(
-                in_channels     = self.n_kernels,
-                out_channels    = 1,
-                kernel_size     = (self.kernel_size, 1),
-                stride          = 1,
-                padding         = (self.kernel_size//2, 0),
-                padding_mode    = 'zeros'
-            ),
-            nn.BatchNorm2d(1),
-            nn.ELU()
-        )
-
-    def forward(self, src, trg):
-        n_batch, src_len, src_ch    = src.shape
-        _, trg_len, trg_ch          = trg.shape
-        # shape size check?
-        enc         = self.encoder_1(src.unsqueeze(1))
-        enc         = self.encoder_2(enc)
-        enc         = self.encoder_3(enc)
-        z_sample    = self._sample_gaussian(self.l_mean(enc),self.l_logvar(enc))
-        dec         = self.decoder_1(z_sample).view(n_batch,self.n_kernels,self.src_len//self.pool_size,1)
-        dec         = self.decoder_2(dec)
-        dec         = self.decoder_3(dec)
-        return dec.squeeze(1)
-
-    def loss(self, pred, trg):
-        loss = F.mse_loss(pred,trg,reduction='sum')
-        loss_dict = {
-            'pred_mse': loss
-        }
-        return (loss, loss_dict)
-    
-    @staticmethod
-    def _sample_gaussian(mean,logvar):
-        eps = torch.randn(mean.shape, requires_grad=False, dtype=torch.float32).type_as(mean)
-        return torch.exp(logvar*0.5)*eps + mean
-
-# -------------------------------------------------
-# -------------------------------------------------
+# ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 class Lfads(PredictionModel):
 
     def __init__(
       self, src_size, encoder_size, encoder_layers, generator_size, generator_layers, factor_size, 
-      loss_weight_dict, dropout, learning_rate, lr_factor,
+      prior, loss_weight_dict, dropout, learning_rate, lr_factor,
       generator_bidir=True, factor_bias=False, do_normalize_factors=True, clip_val=5.0, max_norm=10 
     ):
         super(Lfads, self).__init__(src_size,learning_rate,lr_factor)
@@ -213,8 +95,15 @@ class Lfads(PredictionModel):
         self.generator_layers   = generator_layers
         self.generator_scale    = 2 if generator_bidir else 1
         self.factor_size        = factor_size
+        self.prior_dict         = prior
         self.loss_weight_dict   = loss_weight_dict
         self.dropout            = dropout
+
+        # create model priors (updateable parameters!)
+        self.prior_g0_mean = nn.Parameter(torch.tensor(prior['g0']['mean']['value']))
+        self.prior_g0_logvar = torch.log(nn.Parameter(torch.tensor(prior['g0']['var']['value'])))
+
+        self.l2_gen_scale = loss_weight_dict['l2_gen_scale']
 
         ## create model modules
         # encoder block
@@ -290,20 +179,44 @@ class Lfads(PredictionModel):
             'pred': pred,
             'factors': factors,
             'generator_out': generator_out,
+            'generator_ic': generator_ic,   # used for KL divergence calculation
         }
+
+    def backward(self, loss, optimizer, optimizer_idx, *args, **kwargs):
+        loss.backward(retain_graph=True)
+    
+    def prediction_loss(self, pred, trg):
+        nan_trials = torch.any(torch.any(torch.isnan(pred),dim=1),dim=-1)
+        use_trials = torch.logical_not(nan_trials)
+        pred_loss = F.mse_loss(pred[use_trials,],trg[use_trials,],reduction='mean')
+        correction_scale = nan_trials.numel() / (nan_trials.numel()-nan_trials.sum())
+        return correction_scale * pred_loss
+
+    def generator_hidden_weight_l2_norm(self):
+        U_hr, _, U_hn = self.generator_gru.weight_hh_l0.chunk(3, 0)
+        hr_norm = U_hr.norm(2).pow(2)/U_hr.numel()
+        hn_norm = U_hn.norm(2).pow(2)/U_hn.numel()
+        return hr_norm + hn_norm
 
     def loss(self, pred, trg):
         '''
         Complete LFADS model loss. Combined prediction error, scaled KL divergence from generator outputs and L2 loss.
         '''
-        pred_err = F.mse_loss(pred['pred'],trg,reduce=True,reduction='sum')
-        # kl_div = 0
-        # l2_loss = 0
-        loss = pred_err #+ kl_div + l2_loss
+        # pred_err = F.mse_loss(pred['pred'],trg,reduction='sum')
+        pred_err = self.prediction_loss(pred['pred'],trg)
+        kl_weight = self.loss_weight_dict['kl']['weight']
+        l2_weight = self.loss_weight_dict['l2']['weight']
+        kl_div = kldiv_gaussian_gaussian(pred['generator_ic'][0,],
+                                         pred['generator_ic'][1,], # is this var or logvar?
+                                         self.prior_g0_mean,
+                                         self.prior_g0_logvar)
+        kl_loss = kl_weight * kl_div
+        l2_loss = 0.5 * l2_weight * self.l2_gen_scale * self.generator_hidden_weight_l2_norm()
+        loss = pred_err + kl_loss + l2_loss
         loss_dict = {
             'pred_err': pred_err,
-            # 'kl_div': kl_div,
-            # 'l2_loss': l2_loss,
+            'kl_div': kl_div,
+            'l2_loss': l2_loss,
         }
         return loss, loss_dict
 

@@ -53,14 +53,14 @@ class EcogSrcTrgDataset(Dataset):
         self.trg_len    = trg_len
         with h5py.File(self.file_path,'r') as hf:
             self.shape      = hf[self.read_str].shape
-        assert self.shape[1] >= src_len + trg_len, f"sequence length cannot be longer than 1/2 data sample length ({tensor.shape[1]})"
+        # assert self.shape[1] >= src_len + trg_len, f"sequence length cannot be longer than 1/2 data sample length ({self.shape[1]})"
         self.transform  = transform
 
     def __getitem__(self, index):
         with h5py.File(self.file_path,'r') as hf:
             sample = hf[self.read_str][index,:,:]
         src = torch.tensor(sample[:self.src_len,:], dtype=torch.float32)
-        trg = torch.tensor(sample[self.src_len:self.src_len+self.trg_len,:], dtype=torch.float32)
+        trg = torch.tensor(sample[:self.trg_len,:], dtype=torch.float32)
         return (src,trg)
 
     def __len__(self):
@@ -112,7 +112,7 @@ class GooseWireless250(pl.LightningDataModule):
         self.trg_len    = trg_len
         self.batch_size = batch_size
         # this is a hdf5 dataset with the following items (flat structure): dt, train_data, valid_data, test_data.
-        file_path       = "D:\\Users\\mickey\\Data\\datasets\\ecog\\goose_wireless\\gw_250"
+        file_path       = "D:\\Users\\mickey\\Data\\datasets\\ecog\\goose_wireless\\gw_250_renorm"
         self.file_path  = file_path
         with h5py.File(self.file_path,'r') as hf:
             self.train_dims = hf['train_ecog'].shape
