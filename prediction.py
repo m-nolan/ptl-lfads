@@ -41,8 +41,15 @@ class PredictionModel(pl.LightningModule):
         #   ADD: PERFORMANCE METRICS
         # return {'avg_valid_loss': avg_loss}
     
+    # runs on each batch drawn from the test set dataloader when trainer.test() is called.
+    # add more computations in here for different error/performance values (corr, PSD, etc)
     def test_step(self, test_batch, batch_idx):
         return self._step(test_batch, batch_idx, 'test')
+
+    # called after all test set batches are run through test_step() (above)
+    # aggregate results, save locally and log to wandb, print+save figures.
+    def test_epoch_end(self, outputs):
+        None
 
     def _step(self, batch, batch_idx, log_string_prefix):
         src, trg = batch
@@ -171,7 +178,7 @@ class Lfads(PredictionModel):
                 src.shape[0],
                 self.generator_size
                 )
-        generator_input = torch.empty(src.shape[0],src.shape[1],1).type_as(src)
+        generator_input = torch.zeros(src.shape[0],src.shape[1],1,dtype=src.dtype).to(generator_ic.device)
         generator_out, generator_hidden = self.generator_gru(generator_input,generator_ic)
         factors = self.factor_fc(generator_out)
         pred = self.output_fc(factors)
